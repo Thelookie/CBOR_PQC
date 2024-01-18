@@ -13,10 +13,13 @@
 //
 // This software may be distributed under the terms of the 3-Clause BSD License.
 
+use std::time::{Instant};
+use std::fs::File;
 use crate::cbor::*;
 use crate::der::*;
 use {rustls::*, std::io::Write, webpki, webpki_roots};
 use {std::env::args, std::str::from_utf8};
+use std::path::Path;
 
 pub const SECG_EVEN: u8 = 0x02;
 pub const SECG_ODD: u8 = 0x03;
@@ -25,6 +28,12 @@ pub const SECG_UNCOMPRESSED: u8 = 0x04;
 struct Cert {
     der: Vec<u8>,
     cbor: Vec<Vec<u8>>,
+}
+//Write CBOR encoded Certificate in DER format
+fn write_cbor_to_file(data: &[u8], filename: &str) -> std::io::Result<()> {
+    let mut file = File::create(filename)?;
+    file.write_all(data)?;
+    Ok(())
 }
 
 // Make a TLS connection to get server certificate chain
@@ -48,10 +57,22 @@ fn main() {
     // get certificate from file or tls server and parse them
     let first_arg = args().nth(1).unwrap();
     let second_arg = args().nth(2).expect("No file/domain name given!");
+    
+    // clone file name for saving CBOR encoded certificate
+    let file_name_without_extension = if let Some(file_name) = Path::new(&second_arg).file_stem() {
+        if let Some(file_name_str) = file_name.to_str() {
+            file_name_str
+        } else {
+            panic!("Failed to convert file name to string");
+        }
+    } else {
+        panic!("File name extraction failed");
+    };
+    
     let certs = if first_arg == "f" {
-        vec![parse_cert(std::fs::read(second_arg).unwrap())]
+        vec![parse_cert(std::fs::read(second_arg.clone()).unwrap())]
     } else if first_arg == "u" {
-        get_certs_from_tls(second_arg)
+        get_certs_from_tls(second_arg.clone())
     } else {
         panic!("expected f or u");
     };
@@ -181,6 +202,11 @@ fn main() {
     tls_c509_brotli = [ &[0x00, 0x02], &(tls_c509.len() as u32).to_be_bytes()[1..4], &tls_c509_brotli].concat();
     tls_c509_brotli = [ &[0x19], &(tls_c509_brotli.len() as u32).to_be_bytes()[1..4], &tls_c509_brotli].concat();
     print("Brotli TLS_C509", &tls_c509_brotli);
+
+    ////// saving CBOR encoded certficate ////////
+    if let Err(err) = write_cbor_to_file(&tls_c509, &format!("{}_CBOR.der", file_name_without_extension)) {
+        eprintln!("Error writing CBOR data to file: {}", err);
+    }
 }
 
 // Brotli compression
@@ -654,22 +680,43 @@ pub mod der {
     }
 
     // C509 Certificate Public Key Algorithms Registry
+    // ADD PQC public key algorithms registry
     pub const PK_RSA: i32 = 0;
     pub const PK_SECP256R: i32 = 1;
     pub const PK_SECP384R: i32 = 2;
     pub const PK_SECP521R: i32 = 3;
+    pub const PK_FALCON512: i32 = 33;
+    pub const PK_DILITIUM2: i32 = 34;
+    pub const PK_DILITIUM3: i32 = 35;
+    pub const PK_DILITIUM5: i32 = 36;
+    pub const PK_SPINCS128FS: i32 = 37;
+    pub const PK_SPINCS192FS: i32 = 38;
+    pub const PK_SPINCSHAKE128FS: i32 = 39;
+    pub const PK_SPINCS128SS: i32 = 40;
+    pub const PK_FALCON1024: i32 = 43;
 
+    // Add Some PQC PublicKey OIDs
     pub fn pk_map(ai: &[u8]) -> Option<i32> {
         match ai {
             [0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x01, 0x05, 0x00] => Some(PK_RSA),
             [0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01, 0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07] => Some(PK_SECP256R),
             [0x30, 0x10, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01, 0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x22] => Some(PK_SECP384R),
             [0x30, 0x10, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01, 0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x23] => Some(PK_SECP521R),
+            [0x30, 0x07, 0x06, 0x05, 0x2B, 0xCE, 0x0F, 0x03, 0x06] => Some(PK_FALCON512),
+            [0x30, 0x0D, 0x06, 0x0B, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x02, 0x82, 0x0B, 0x07, 0x08, 0x07] => Some(PK_DILITIUM5),
+            [0x30, 0x0D, 0x06, 0x0B, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x02, 0x82, 0x0B, 0x07, 0x06, 0x05] => Some(PK_DILITIUM3),
+            [0x30, 0x0D, 0x06, 0x0B, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x02, 0x82, 0x0B, 0x07, 0x04, 0x04] => Some(PK_DILITIUM2),
+            [0x30, 0x08, 0x06, 0x06, 0x2B, 0xCE, 0x0F, 0x06, 0x04, 0x0D] => Some(PK_SPINCS128FS),
+            [0x30, 0x08, 0x06, 0x06, 0x2B, 0xCE, 0x0F, 0x06, 0x05, 0x0A] => Some(PK_SPINCS192FS),
+            [0x30, 0x08, 0x06, 0x06, 0x2B, 0xCE, 0x0F, 0x06, 0x07, 0x0D] => Some(PK_SPINCSHAKE128FS),
+            [0x30, 0x08, 0x06, 0x06, 0x2B, 0xCE, 0x0F, 0x06, 0x04, 0x10] => Some(PK_SPINCS128SS),
+            [0x30, 0x07, 0x06, 0x05, 0x2B, 0xCE, 0x0F, 0x03, 0x09] => Some(PK_FALCON1024),
             _ => None,
         }
     }
 
     // C509 Certificate Signature Algorithms Registry
+    // Add Some PQC signature algorithms registry
     pub const SIG_RSA_V15_SHA1: i32 = -256;
     pub const SIG_ECDSA_SHA256: i32 = 0;
     pub const SIG_ECDSA_SHA384: i32 = 1;
@@ -677,6 +724,15 @@ pub mod der {
     pub const SIG_RSA_V15_SHA256: i32 = 23;
     pub const SIG_RSA_V15_SHA384: i32 = 24;
     pub const SIG_RSA_V15_SHA512: i32 = 25;
+    pub const SIG_FALCON512: i32 = 26;
+    pub const SIG_FALCON1024: i32 = 27;
+    pub const SIG_DILITIUM5: i32 = 28;
+    pub const SIG_DILITIUM3: i32 = 29;
+    pub const SIG_DILITIUM2: i32 = 30;
+    pub const SIG_SPINCS128FS: i32 = 31;
+    pub const SIG_SPINCS192FS: i32 = 32;
+    pub const SIG_SPINCSHAKE128FS: i32 = 33;
+    pub const SIG_SPINCS128SS: i32 = 34;
 
     pub fn sig_map(ai: &[u8]) -> Option<i32> {
         match ai {
@@ -687,6 +743,15 @@ pub mod der {
             [0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B, 0x05, 0x00] => Some(SIG_RSA_V15_SHA256),
             [0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0C, 0x05, 0x00] => Some(SIG_RSA_V15_SHA384),
             [0x30, 0x0D, 0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0D, 0x05, 0x00] => Some(SIG_RSA_V15_SHA512),
+            [0x30, 0x07, 0x06, 0x05, 0x2B, 0xCE, 0x0F, 0x03, 0x06] => Some(SIG_FALCON512),
+            [0x30, 0x07, 0x06, 0x05, 0x2B, 0xCE, 0x0F, 0x03, 0x09] => Some(SIG_FALCON1024),
+            [0x30, 0x0D, 0x06, 0x0B, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x02, 0x82, 0x0B, 0x07, 0x08, 0x07] => Some(SIG_DILITIUM5),
+            [0x30, 0x0D, 0x06, 0x0B, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x02, 0x82, 0x0B, 0x07, 0x06, 0x05] => Some(SIG_DILITIUM3),
+            [0x30, 0x0D, 0x06, 0x0B, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x02, 0x82, 0x0B, 0x07, 0x04, 0x04] => Some(SIG_DILITIUM2),
+            [0x30, 0x08, 0x06, 0x06, 0x2B, 0xCE, 0x0F, 0x06, 0x04, 0x0D] => Some(SIG_SPINCS128FS),
+            [0x30, 0x08, 0x06, 0x06, 0x2B, 0xCE, 0x0F, 0x06, 0x05, 0x0A] => Some(SIG_SPINCS192FS),
+            [0x30, 0x08, 0x06, 0x06, 0x2B, 0xCE, 0x0F, 0x06, 0x07, 0x0D] => Some(SIG_SPINCSHAKE128FS),
+            [0x30, 0x08, 0x06, 0x06, 0x2B, 0xCE, 0x0F, 0x06, 0x04, 0x10] => Some(SIG_SPINCS128SS),
             _ => None,
         }
     }
